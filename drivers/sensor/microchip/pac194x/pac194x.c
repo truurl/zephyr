@@ -123,6 +123,42 @@ static char *pac194x_accum_mode_name_get(uint8_t mode)
 	}
 }
 
+static inline uint8_t pac194x_sensor_channel_to_chan_id(enum sensor_channel chan)
+{
+	int chan_id;
+	/* Convert channel to channel ID */
+	switch ((enum pac194x_sensor_channel)chan) {
+	case PAC194X_CHAN_VBUS1:
+	case PAC194X_CHAN_CURR1:
+	case PAC194X_CHAN_ACC1:
+	case PAC194X_CHAN_ACC1_AVG:
+		chan_id = 0;
+		break;
+	case PAC194X_CHAN_VBUS2:
+	case PAC194X_CHAN_CURR2:
+	case PAC194X_CHAN_ACC2:
+	case PAC194X_CHAN_ACC2_AVG:
+		chan_id = 1;
+		break;
+	case PAC194X_CHAN_VBUS3:
+	case PAC194X_CHAN_CURR3:
+	case PAC194X_CHAN_ACC3:
+	case PAC194X_CHAN_ACC3_AVG:
+		chan_id = 2;
+		break;
+	case PAC194X_CHAN_VBUS4:
+	case PAC194X_CHAN_CURR4:
+	case PAC194X_CHAN_ACC4:
+	case PAC194X_CHAN_ACC4_AVG:
+		chan_id = 3;
+		break;
+	default:
+		chan_id = 0xff;
+	}
+
+	return chan_id;
+}
+
 static int pac194x_cmd_refresh(const struct device *dev)
 {
 	const struct pac194x_config *config = dev->config;
@@ -156,7 +192,9 @@ static int pac194x_sample_fetch(const struct device *dev, enum sensor_channel ch
 {
 	const struct pac194x_config *config = dev->config;
 	struct pac194x_data *data = dev->data;
+	uint8_t buf_2[2];
 	uint8_t buf_4[4];
+	uint8_t buf_8[8];
 	int ret;
 	int i;
 
@@ -172,45 +210,74 @@ static int pac194x_sample_fetch(const struct device *dev, enum sensor_channel ch
 		k_msleep(2);
 	}
 
-	for (i = 0; i < data->info->phys_channels; i++) {
-		/* Check if the channel is enabled */
-		if (!data->channels[i].enabled) {
-			continue;
-		}
+	if ((int)chan == PAC194X_CHAN_ACC_COUNT) {
+		/* Store Accumulator counter */
+		ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_ACC_COUNT, buf_4, sizeof(buf_4));
+		if (ret < 0) {
+			return ret;
 
-		uint8_t buf_2[2];
-		uint8_t buf_8[8];
-
-		/* Read VBUS (Bus Voltage) - 2 bytes */
-		ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_VBUS1 + i, buf_2, sizeof(buf_2));
+		data->acc_count = sys_get_be32(buf_4);
+	} else if ((int)chan >= PAC194X_CHAN_VBUS1 && (int)chan <= PAC194X_CHAN_ACC4_AVG) {
+		uint8_t chan_id = pac194x_sensor_channel_to_chan_id(chan);
+		 /* Read VBUS (Bus Voltage) - 2 bytes */
+		ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_VBUS1 + chan_id, buf_2, sizeof(buf_2));
 		if (ret < 0) {
 			return ret;
 		}
-		data->channels[i].vbus = sys_get_be16(buf_2);
+		data->channels[chan_id].vbus = sys_get_be16(buf_2);
 
 		/* Read VSENSE (Sense Resistor Voltage) - 2 bytes */
-		ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_VSENSE1 + i,
+		ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_VSENSE1 + chan_id ,
 					buf_2, sizeof(buf_2));
 		if (ret < 0) {
 			return ret;
 		}
-		data->channels[i].vsense = sys_get_be16(buf_2);
+		data->channels[chan_id].vsense = sys_get_be16(buf_2);
 
 		/* Read VACC (Accumulator) - 56 bits (7 bytes) */
 		buf_8[0] = 0;
-		ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_VACC1 + i, &buf_8[1], 7);
+		ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_VACC1 + chan_id, &buf_8[1], 7);
 		if (ret < 0) {
 			return ret;
 		}
-		data->channels[i].vacc = sys_get_be64(buf_8);
-	}
+		data->channels[chan_id].vacc = sys_get_be64(buf_8);
+	} else if ((int)chan == SENSOR_CHAN_ALL) {
+		for (i = 0; i < data->info->phys_channels; i++) {
+			/* Check if the channel is enabled */
+			if (!data->channels[i].enabled) {
+				continue;
+			}
+			/* Read VBUS (Bus Voltage) - 2 bytes */
+			ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_VBUS1 + i, buf_2, sizeof(buf_2));
+			if (ret < 0) {
+				return ret;
+			}
+			data->channels[i].vbus = sys_get_be16(buf_2);
 
-	/* Store Accumulator counter */
-	ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_ACC_COUNT, buf_4, sizeof(buf_4));
-	if (ret < 0) {
-		return ret;
+			/* Read VSENSE (Sense Resistor Voltage) - 2 bytes */
+			ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_VSENSE1 + i,
+						buf_2, sizeof(buf_2));
+			if (ret < 0) {
+				return ret;
+			}
+			data->channels[i].vsense = sys_get_be16(buf_2);
+
+			/* Read VACC (Accumulator) - 56 bits (7 bytes) */
+			buf_8[0] = 0;
+			ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_VACC1 + i, &buf_8[1], 7);
+			if (ret < 0) {
+				return ret;
+			}
+                       data->channels[i].vacc = sys_get_be64(buf_8);
+		}
+
+		/* Store Accumulator counter */
+		ret = i2c_burst_read_dt(&config->i2c, PAC194X_REG_ACC_COUNT, buf_4, sizeof(buf_4));
+		if (ret < 0) {
+			return ret;
+		}
+		data->acc_count = sys_get_be32(buf_4);
 	}
-	data->acc_count = sys_get_be32(buf_4);
 
 	/* DEFAULT:
 	 * Trigger REFRESH in AUTO_NOWAIT mode. PAC needs to wait 1ms after the data
@@ -519,39 +586,9 @@ static int pac194x_attr_set(const struct device *dev,
 {
 	const struct pac194x_config *config = dev->config;
 	struct pac194x_data *data = dev->data;
+	uint8_t chan_id = pac194x_sensor_channel_to_chan_id(chan);
 	int mode;
 	int ret;
-	uint8_t chan_id;
-
-	/* Convert channel to channel ID */
-	switch ((enum pac194x_sensor_channel)chan) {
-	case PAC194X_CHAN_VBUS1:
-	case PAC194X_CHAN_CURR1:
-	case PAC194X_CHAN_ACC1:
-	case PAC194X_CHAN_ACC1_AVG:
-		chan_id = 0;
-		break;
-	case PAC194X_CHAN_VBUS2:
-	case PAC194X_CHAN_CURR2:
-	case PAC194X_CHAN_ACC2:
-	case PAC194X_CHAN_ACC2_AVG:
-		chan_id = 1;
-		break;
-	case PAC194X_CHAN_VBUS3:
-	case PAC194X_CHAN_CURR3:
-	case PAC194X_CHAN_ACC3:
-	case PAC194X_CHAN_ACC3_AVG:
-		chan_id = 2;
-		break;
-	case PAC194X_CHAN_VBUS4:
-	case PAC194X_CHAN_CURR4:
-	case PAC194X_CHAN_ACC4:
-	case PAC194X_CHAN_ACC4_AVG:
-		chan_id = 3;
-		break;
-	default:
-		chan_id = 0xff;
-	}
 
 	mode = val->val1;
 	switch ((int)attr) {
