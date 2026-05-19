@@ -11,6 +11,17 @@ compatible: "microchip,pac194x"
 
 include: [sensor-device.yaml, i2c-device.yaml]
 
+properties:
+  description: PAC194X/PAC195X specific configuration
+  microchop,refresh-mode:
+    type: int
+    default: 0
+    description: Refresh mode
+    enum:
+      - 0 # PAC_REFRESH_MANUAL
+      - 1 # PAC_REFRESH_AUTO_WAIT
+      - 2 # PAC_REFRESH_AUTO_NOWAIT
+
 child-binding:
   description: PAC194X/PAC195X specific channel configuration
   properties:
